@@ -48,12 +48,13 @@ export async function processEmailJob(payload: EmailJobPayload): Promise<EmailJo
     return "SKIPPED";
   }
 
-  const log = await prisma.notificationLog.upsert({
+  await prisma.notificationLog.upsert({
     where: { jobKey: payload.jobKey },
     update: {
-      status: NotificationStatus.PENDING,
-      attempts: { increment: 1 },
       subject: rendered.subject,
+      recipientEmail: payload.to,
+      recipientUserId: payload.recipientUserId ?? null,
+      metadata: payload.data as object,
     },
     create: {
       jobKey: payload.jobKey,
@@ -62,11 +63,37 @@ export async function processEmailJob(payload: EmailJobPayload): Promise<EmailJo
       recipientEmail: payload.to,
       recipientUserId: payload.recipientUserId ?? null,
       subject: rendered.subject,
-      attempts: 1,
+      attempts: 0,
       scheduledFor: new Date(),
       metadata: payload.data as object,
     },
   });
+
+  // Aynı QStash işi veya manuel retry eşzamanlı gelirse yalnızca bir süreç SMTP
+  // gönderimini sahiplenir. Eski PROCESSING kayıtları worker çökmesine karşı
+  // on dakika sonra tekrar sahiplenilebilir.
+  const claimTime = new Date();
+  const staleProcessing = new Date(claimTime.getTime() - 10 * 60 * 1000);
+  const claimed = await prisma.notificationLog.updateMany({
+    where: {
+      jobKey: payload.jobKey,
+      OR: [
+        { status: { in: [NotificationStatus.PENDING, NotificationStatus.FAILED] } },
+        {
+          status: NotificationStatus.PROCESSING,
+          processingStartedAt: { lt: staleProcessing },
+        },
+      ],
+    },
+    data: {
+      status: NotificationStatus.PROCESSING,
+      processingStartedAt: claimTime,
+      attempts: { increment: 1 },
+      subject: rendered.subject,
+      errorMessage: null,
+    },
+  });
+  if (claimed.count === 0) return "SKIPPED";
 
   try {
     const result = await sendMail({
@@ -76,9 +103,10 @@ export async function processEmailJob(payload: EmailJobPayload): Promise<EmailJo
       text: rendered.text,
     });
     await prisma.notificationLog.update({
-      where: { id: log.id },
+      where: { jobKey: payload.jobKey },
       data: {
         status: NotificationStatus.SENT,
+        processingStartedAt: null,
         sentAt: new Date(),
         providerId: result.providerId,
         errorMessage: null,
@@ -88,9 +116,10 @@ export async function processEmailJob(payload: EmailJobPayload): Promise<EmailJo
   } catch (error) {
     const message = error instanceof Error ? error.message : "Bilinmeyen e-posta hatası";
     await prisma.notificationLog.update({
-      where: { id: log.id },
+      where: { jobKey: payload.jobKey },
       data: {
         status: NotificationStatus.FAILED,
+        processingStartedAt: null,
         failedAt: new Date(),
         errorMessage: message.slice(0, 500),
       },

@@ -40,14 +40,6 @@ export async function enforceRateLimit(rule: RateLimitRule, identifier: string):
     create: { key, windowStart, count: 1 },
   });
 
-  // Eski pencereleri ara sıra temizle (yaklaşık her 50 istekte bir).
-  if (Math.random() < 0.02) {
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    prisma.rateLimitEntry
-      .deleteMany({ where: { windowStart: { lt: cutoff } } })
-      .catch(() => undefined);
-  }
-
   if (entry.count > rule.limit) {
     throw new ApiError(
       "RATE_LIMITED",

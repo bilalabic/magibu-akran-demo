@@ -84,6 +84,7 @@ enum NotificationType {
 
 enum NotificationStatus {
   PENDING
+  PROCESSING
   SENT
   FAILED
   SKIPPED
@@ -448,6 +449,7 @@ model NotificationLog {
   attempts        Int     @default(0)
 
   scheduledFor DateTime?
+  processingStartedAt DateTime?
   sentAt       DateTime?
   failedAt     DateTime?
 
@@ -457,6 +459,7 @@ model NotificationLog {
   updatedAt DateTime @updatedAt
 
   @@index([type, status])
+  @@index([status, scheduledFor])
   @@index([recipientUserId])
   @@index([scheduledFor])
 }
@@ -477,6 +480,7 @@ model ScheduledJobLog {
   updatedAt DateTime @updatedAt
 
   @@index([jobType, status])
+  @@index([createdAt])
 }
 
 // Postgres tabanlı fixed-window rate limit (NFR-1.5; Redis kullanılmaz)

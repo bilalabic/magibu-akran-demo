@@ -38,12 +38,18 @@ function transporter(): Transporter {
   }
 
   const created = nodemailer.createTransport({
+    pool: true,
     host,
     port: Number(process.env.SMTP_PORT ?? 587),
     secure: process.env.SMTP_SECURE === "true",
     auth: process.env.SMTP_USER
       ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD }
       : undefined,
+    maxConnections: Number(process.env.SMTP_MAX_CONNECTIONS ?? 5),
+    maxMessages: Number(process.env.SMTP_MAX_MESSAGES ?? 100),
+    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS ?? 10_000),
+    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS ?? 10_000),
+    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS ?? 60_000),
   });
   globalForMailer.mailTransporter = created;
   return created;
@@ -66,4 +72,9 @@ export async function sendMail(input: MailInput): Promise<MailResult> {
     text: input.text,
   });
   return { providerId: info.messageId ?? null };
+}
+
+export function closeMailer(): void {
+  globalForMailer.mailTransporter?.close();
+  globalForMailer.mailTransporter = undefined;
 }
