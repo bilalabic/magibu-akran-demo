@@ -1,55 +1,60 @@
 # Akran Değerlendirme ve Ödev Yönetim Sistemi
 
-Öğretmenin ön onayladığı e-posta adresleriyle kayıt olan öğrencilerin ödevlerini bağlantılar
-üzerinden teslim ettiği, teslim süresi sonunda otomatik akran değerlendirme atamalarının
-yapıldığı full-stack web uygulaması.
+Öğretmenin ön onayladığı (white-list) e-posta adresleriyle kayıt olan öğrencilerin
+ödevlerini bağlantılar üzerinden teslim ettiği, teslim süresi bitiminde otomatik
+akran değerlendirme atamalarının yapıldığı full-stack web uygulaması.
 
-Bağlayıcı iş kuralları: [akran-degerlendirme-sistemi-birlesik-dokuman.md](akran-degerlendirme-sistemi-birlesik-dokuman.md)
+> Bağlayıcı spesifikasyon: [akran-degerlendirme-sistemi-birlesik-dokuman.md](akran-degerlendirme-sistemi-birlesik-dokuman.md)
+> — tüm iş kuralları (FR-\*), güvenlik gereksinimleri (NFR-\*) ve kabul kriterleri oradan gelir.
 
 ## Teknoloji
 
-- Next.js 16 App Router + React 19 + TypeScript
-- Prisma 7 + PostgreSQL
-- PostgreSQL tabanlı pg-boss queue/worker ve kod içinde yönetilen cron takvimi
-- İsteğe bağlı, pasif Vercel/QStash geri dönüş altyapısı
-- Nodemailer/SMTP, Zod, shadcn/ui ve Tailwind CSS 4
+- **Next.js 16** (App Router, Route Handlers) + **TypeScript** — tek proje, tek deploy
+- **Prisma 7** + **Supabase PostgreSQL** (yalnızca veritabanı; erişim yalnız sunucu tarafında)
+- **Kendi JWT sistemimiz** (jose, HS256): access 15dk + refresh 7g rotation; HttpOnly cookie; bcryptjs
+- **Zod** doğrulama, Postgres tabanlı rate limit (Redis yok)
+- **Upstash QStash** asenkron e-posta kuyruğu + **Vercel Cron / QStash Schedules** zamanlanmış işler
+- **Nodemailer/SMTP** e-posta, **shadcn/ui + Tailwind v4**, **exceljs** rapor dışa aktarma
 
-## Yerel kurulum
+## Roller ve akış
+
+- **Öğretmen:** white-list (manuel + CSV/Excel import), ders/modül/ödev/rubrik yönetimi,
+  teslim havuzu, akran atama, raporlar (CSV + Excel).
+- **Öğrenci:** white-list ile kayıt, ödev teslimi (başlık + açıklama + http/https bağlantılar),
+  ödev havuzu ve yorumlar, kendisine atanan iki teslimi rubrik üzerinden değerlendirme.
+- Değerlendiren öğrencinin kimliği teslim sahibine **hiçbir zaman** gösterilmez.
+
+## Kurulum
 
 ```bash
 npm install
-cp .env.example .env
-npm run db:deploy
-npm run db:seed
+cp .env.example .env      # değerleri doldur (DB, JWT, SMTP, QStash, CRON_SECRET)
+npx prisma migrate deploy # veya geliştirmede: npx prisma migrate dev
+npm run db:seed           # INITIAL_TEACHER_* env'inden öğretmen hesabı
 npm run dev
 ```
 
-Yerel geliştirmede `JOB_BACKEND=inline` ve `EMAIL_MODE=log` kullanılabilir. Production
-davranışını yerelde denemek için `JOB_BACKEND=pgboss` ayarlayıp ikinci terminalde çalıştırın:
-
-```bash
-npm run worker
-```
+Öğretmen hesabını CLI ile de oluşturabilirsiniz:
+`npx tsx scripts/create-teacher.ts --email a@b.c --password "..." --name "Ad Soyad"`
 
 ## Komutlar
 
 | Komut | Açıklama |
 |---|---|
-| `npm run dev` | Next.js geliştirme sunucusu |
+| `npm run dev` | Geliştirme sunucusu (Turbopack) |
 | `npm run build` | Production build |
-| `npm start` | Migration + production web sunucusu |
-| `npm run worker` | Migration + pg-boss worker ve scheduler |
-| `npm run lint` | ESLint |
-| `npm run typecheck` | TypeScript kontrolü |
-| `npm test` | Vitest testleri |
-| `npm run db:deploy` | Production migration |
-| `npm run db:seed` | İlk öğretmen hesabını oluşturur |
+| `npm run lint` / `npm run typecheck` | ESLint / `tsc --noEmit` |
+| `npm test` | Vitest (unit + integration) |
+| `npm run db:migrate` / `db:deploy` / `db:studio` / `db:seed` | Prisma işlemleri |
 
-## Production
+## Ortam değişkenleri
 
-Birincil platform Coolify'dır. Web ve worker aynı Docker image'dan iki ayrı resource olarak
-çalışır; PostgreSQL üçüncü resource'tur. Kesin kurulum değerleri ve ilk deploy sırası için
-[COOLIFY.md](COOLIFY.md) dosyasını izleyin.
+Tümü [.env.example](.env.example)'da belgelidir. Gerçek değerler yalnız yerel `.env`
+(git'e girmez) ve Vercel Environment Variables'ta tutulur. `DATABASE_URL`/`DIRECT_URL`
+ve diğer secret'lar **asla** `NEXT_PUBLIC_` ile tanımlanmaz.
 
-Vercel altyapısı pasif olarak korunur. `vercel.json` cron içermez ve QStash yalnızca
-`JOB_BACKEND=qstash` açıkça seçildiğinde kullanılır.
+## Deployment
+
+Vercel'e deploy edilir. Vercel Hobby planı gün-içi cron'a izin vermediğinden zamanlanmış
+işler **QStash Schedules** üzerinden `/api/cron/*` endpoint'lerini `CRON_SECRET` ile tetikler.
+Production migration: `npx prisma migrate deploy`.
