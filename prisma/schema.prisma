@@ -1,0 +1,494 @@
+// Akran Değerlendirme ve Ödev Yönetim Sistemi — veri modeli
+// Kaynak: akran-degerlendirme-sistemi-birlesik-dokuman.md Bölüm 7
+// Dökümana ek tamamlamalar: WhitelistEntry.name, PasswordResetToken,
+// NotificationType.PASSWORD_RESET, RateLimitEntry (Postgres tabanlı rate limit)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  TEACHER
+  STUDENT
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum WhitelistStatus {
+  PENDING
+  REGISTERED
+  REVOKED
+}
+
+enum CourseRole {
+  TEACHER
+  STUDENT
+}
+
+enum AssignmentStatus {
+  DRAFT
+  PUBLISHED
+  SUBMISSION_OPEN
+  SUBMISSION_CLOSED
+  REVIEW_OPEN
+  REVIEW_CLOSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum SubmissionStatus {
+  DRAFT
+  SUBMITTED
+  LOCKED
+}
+
+enum CriterionType {
+  SCORE
+  TEXT
+}
+
+enum PeerAssignmentStatus {
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+}
+
+enum PeerReviewStatus {
+  DRAFT
+  SUBMITTED
+}
+
+enum NotificationType {
+  INVITATION
+  PEER_ASSIGNMENT
+  REVIEW_COMPLETED_OWNER
+  REVIEW_COMPLETED_TEACHER
+  SUBMISSION_REMINDER
+  REVIEW_REMINDER
+  SUBMISSION_COMMENT
+  COMMENT_REPLY
+  STUDENT_REPORT
+  TEACHER_WEEKLY_REPORT
+  PASSWORD_RESET
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String
+  passwordHash String
+  role         UserRole   @default(STUDENT)
+  status       UserStatus @default(ACTIVE)
+
+  lastLoginAt DateTime?
+  deletedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  whitelistEntry      WhitelistEntry?
+  sessions            Session[]
+  memberships         CourseMembership[]
+  submissions         Submission[]
+  comments            Comment[]
+  peerAssignments     PeerAssignment[]     @relation("ReviewerAssignments")
+  peerReviews         PeerReview[]
+  createdCourses      Course[]             @relation("CourseCreator")
+  createdAssignments  Assignment[]         @relation("AssignmentCreator")
+  passwordResetTokens PasswordResetToken[]
+
+  @@index([role])
+  @@index([status])
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastUsedAt       DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model WhitelistEntry {
+  id     String          @id @default(cuid())
+  email  String          @unique
+  name   String?
+  role   UserRole        @default(STUDENT)
+  status WhitelistStatus @default(PENDING)
+
+  invitedAt    DateTime?
+  registeredAt DateTime?
+  revokedAt    DateTime?
+
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id])
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+  @@index([role])
+}
+
+model Course {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+
+  createdById String
+  createdBy   User   @relation("CourseCreator", fields: [createdById], references: [id])
+
+  memberships CourseMembership[]
+  modules     AssignmentModule[]
+  assignments Assignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdById])
+  @@index([isActive])
+}
+
+model CourseMembership {
+  id       String     @id @default(cuid())
+  role     CourseRole @default(STUDENT)
+  joinedAt DateTime   @default(now())
+  leftAt   DateTime?
+
+  userId   String
+  courseId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([courseId, role])
+}
+
+model AssignmentModule {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+  order       Int
+  isActive    Boolean @default(true)
+
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  assignments Assignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, order])
+  @@index([courseId])
+}
+
+model Assignment {
+  id          String           @id @default(cuid())
+  title       String
+  description String
+  linkRules   String?
+  status      AssignmentStatus @default(DRAFT)
+
+  submissionStartsAt DateTime
+  submissionEndsAt   DateTime
+  reviewStartsAt     DateTime
+  reviewEndsAt       DateTime
+
+  requiredReviewCount Int     @default(2)
+  isAnonymous         Boolean @default(true)
+
+  courseId    String
+  moduleId    String?
+  createdById String
+
+  course    Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  module    AssignmentModule? @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  createdBy User              @relation("AssignmentCreator", fields: [createdById], references: [id])
+
+  rubric          Rubric?
+  submissions     Submission[]
+  peerAssignments PeerAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courseId])
+  @@index([moduleId])
+  @@index([status])
+  @@index([submissionEndsAt])
+  @@index([reviewEndsAt])
+}
+
+model Submission {
+  id          String           @id @default(cuid())
+  title       String
+  description String
+  status      SubmissionStatus @default(DRAFT)
+
+  submittedAt DateTime?
+  lockedAt    DateTime?
+
+  assignmentId String
+  studentId    String
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student    User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  links           SubmissionLink[]
+  comments        Comment[]
+  peerAssignments PeerAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([assignmentId, studentId])
+  @@index([assignmentId, status])
+  @@index([studentId])
+}
+
+model SubmissionLink {
+  id        String  @id @default(cuid())
+  label     String?
+  url       String
+  sortOrder Int     @default(0)
+
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([submissionId, sortOrder])
+}
+
+model Comment {
+  id        String    @id @default(cuid())
+  content   String
+  isDeleted Boolean   @default(false)
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  submissionId String
+  authorId     String
+  parentId     String?
+
+  submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  author     User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent     Comment?   @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    Comment[]  @relation("CommentReplies")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([submissionId, createdAt])
+  @@index([authorId])
+  @@index([parentId])
+}
+
+model Rubric {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+
+  assignmentId String     @unique
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  criteria RubricCriterion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RubricCriterion {
+  id          String        @id @default(cuid())
+  title       String
+  description String?
+  type        CriterionType
+  required    Boolean       @default(true)
+  order       Int
+
+  minScore Int?
+  maxScore Int?
+  weight   Decimal? @db.Decimal(5, 2)
+
+  rubricId String
+  rubric   Rubric @relation(fields: [rubricId], references: [id], onDelete: Cascade)
+
+  answers ReviewAnswer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([rubricId, order])
+  @@index([rubricId, type])
+}
+
+model PeerAssignment {
+  id     String               @id @default(cuid())
+  status PeerAssignmentStatus @default(ASSIGNED)
+
+  assignedAt  DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+  expiresAt   DateTime
+
+  assignmentId String
+  submissionId String
+  reviewerId   String
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  reviewer   User       @relation("ReviewerAssignments", fields: [reviewerId], references: [id], onDelete: Cascade)
+
+  review PeerReview?
+
+  @@unique([assignmentId, reviewerId, submissionId])
+  @@index([reviewerId, status])
+  @@index([assignmentId, status])
+  @@index([submissionId])
+  @@index([expiresAt])
+}
+
+model PeerReview {
+  id          String           @id @default(cuid())
+  status      PeerReviewStatus @default(DRAFT)
+  submittedAt DateTime?
+
+  peerAssignmentId String @unique
+  reviewerId       String
+
+  peerAssignment PeerAssignment @relation(fields: [peerAssignmentId], references: [id], onDelete: Cascade)
+  reviewer       User           @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
+
+  answers ReviewAnswer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([reviewerId])
+  @@index([status])
+}
+
+model ReviewAnswer {
+  id        String  @id @default(cuid())
+  score     Int?
+  textValue String?
+
+  peerReviewId String
+  criterionId  String
+
+  peerReview PeerReview      @relation(fields: [peerReviewId], references: [id], onDelete: Cascade)
+  criterion  RubricCriterion @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([peerReviewId, criterionId])
+  @@index([criterionId])
+}
+
+model NotificationLog {
+  id     String             @id @default(cuid())
+  type   NotificationType
+  status NotificationStatus @default(PENDING)
+  jobKey String             @unique
+
+  recipientEmail  String
+  recipientUserId String?
+  subject         String?
+  errorMessage    String?
+  providerId      String?
+  attempts        Int     @default(0)
+
+  scheduledFor DateTime?
+  sentAt       DateTime?
+  failedAt     DateTime?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type, status])
+  @@index([recipientUserId])
+  @@index([scheduledFor])
+}
+
+model ScheduledJobLog {
+  id      String  @id @default(cuid())
+  jobKey  String  @unique
+  jobType String
+  status  String
+  payload Json?
+  result  Json?
+  error   String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([jobType, status])
+}
+
+// Postgres tabanlı fixed-window rate limit (NFR-1.5; Redis kullanılmaz)
+model RateLimitEntry {
+  id          String   @id @default(cuid())
+  key         String
+  windowStart DateTime
+  count       Int      @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([key, windowStart])
+  @@index([windowStart])
+}
